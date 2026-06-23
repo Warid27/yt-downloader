@@ -1,0 +1,15 @@
+# Local agent/workspace state
+.qwen/
+
+# Built Windows executables and compiler outputs
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Auto-downloaded runtime binaries
+ffmpeg-master-latest-win64-gpl-shared/
+yt-dlp.exe
+
+# Download outputs and logs
+results/
