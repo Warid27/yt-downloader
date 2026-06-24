@@ -17,10 +17,10 @@ exit /b 1
 
 :build_msvc
 echo Building with MSVC...
-cl /nologo /std:c++17 /EHsc /DUNICODE /D_UNICODE "%SRC%" /Fe:"%OUT%" /link user32.lib shell32.lib comctl32.lib ole32.lib
+cl /nologo /std:c++17 /EHsc /MT /DUNICODE /D_UNICODE "%SRC%" /Fe:"%OUT%" /link user32.lib shell32.lib comctl32.lib ole32.lib
 exit /b %ERRORLEVEL%
 
 :build_mingw
 echo Building with MinGW-w64...
-g++ -std=c++17 -municode -mwindows "%SRC%" -o "%OUT%" -lcomctl32 -lole32
+g++ -std=c++17 -municode -mwindows -static -static-libgcc -static-libstdc++ "%SRC%" -o "%OUT%" -lcomctl32 -lole32
 exit /b %ERRORLEVEL%
