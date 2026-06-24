@@ -2,6 +2,8 @@
 #include <commctrl.h>
 #include <shlobj.h>
 
+#include "resource.h"
+
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -509,10 +511,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     InitCommonControlsEx(&icc);
 
     const wchar_t className[] = L"YtDownloaderGuiWindow";
+    HICON appIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     WNDCLASSW wc{};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = instance;
     wc.lpszClassName = className;
+    wc.hIcon = appIcon;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
@@ -520,6 +524,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     HWND hwnd = CreateWindowExW(0, className, L"YT Downloader GUI", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                                 CW_USEDEFAULT, CW_USEDEFAULT, 745, 565, nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 1;
+    if (appIcon) {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
+    }
 
     ShowWindow(hwnd, show);
     UpdateWindow(hwnd);
