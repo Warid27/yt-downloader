@@ -183,7 +183,7 @@ void EnsureFfmpegPath(const fs::path& bin) {
     SetEnvironmentVariableW(L"PATH", updated.c_str());
 }
 
-int RunCommand(const std::wstring& command, const fs::path& cwd, const fs::path* appendFile = nullptr) {
+int RunCommand(const std::wstring& command, const fs::path& cwd, const fs::path* appendFile = nullptr, bool showOutput = true) {
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -220,7 +220,7 @@ int RunCommand(const std::wstring& command, const fs::path& cwd, const fs::path*
     while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &read, nullptr) && read > 0) {
         buffer[read] = '\0';
         if (logFile) logFile.write(buffer, read);
-        AppendLogFromWorker(ToWide(std::string(buffer, read)));
+        if (showOutput) AppendLogFromWorker(ToWide(std::string(buffer, read)));
     }
 
     WaitForSingleObject(pi.hProcess, INFINITE);
@@ -232,31 +232,40 @@ int RunCommand(const std::wstring& command, const fs::path& cwd, const fs::path*
     return static_cast<int>(exitCode);
 }
 
-bool DownloadFilePowerShell(const std::wstring& url, const fs::path& output) {
+void ShowUserMessage(bool advanced, const std::wstring& simple, const std::wstring& advancedText = L"") {
+    if (advanced) {
+        AppendLogFromWorker(advancedText.empty() ? simple : advancedText);
+    } else {
+        AppendLogFromWorker(simple);
+    }
+}
+
+bool DownloadFilePowerShell(const std::wstring& url, const fs::path& output, bool showOutput = true) {
     fs::create_directories(output.parent_path());
     std::wstring command = L"powershell -NoProfile -ExecutionPolicy Bypass -Command \"[Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -Uri '";
     command += url + L"' -OutFile " + Quote(output.wstring()) + L" -UseBasicParsing\"";
-    return RunCommand(command, g_app.appDir) == 0;
+    return RunCommand(command, g_app.appDir, nullptr, showOutput) == 0;
 }
 
-bool EnsureYtDlp(bool debug) {
+bool EnsureYtDlp(bool advanced) {
     fs::path local = g_app.appDir / L"yt-dlp.exe";
     if (!fs::exists(local)) {
-        AppendLogFromWorker(L"yt-dlp.exe not found. Downloading latest release...\r\n");
-        if (!DownloadFilePowerShell(L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", local)) {
-            AppendLogFromWorker(L"Could not download yt-dlp.exe.\r\n");
+        ShowUserMessage(advanced, L"Preparing downloader...\r\n", L"yt-dlp.exe not found. Downloading latest release...\r\n");
+        if (!DownloadFilePowerShell(L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", local, advanced)) {
+            ShowUserMessage(advanced, L"Could not prepare the downloader. Please check your internet connection and try again.\r\n", L"Could not download yt-dlp.exe.\r\n");
             return false;
         }
     }
 
+    ShowUserMessage(advanced, L"Checking downloader updates...\r\n");
     std::wstring command = Quote(local.wstring()) + L" --update-to nightly";
-    if (debug) AppendLogFromWorker(L"DEBUG command: " + command + L"\r\n");
-    int exitCode = RunCommand(command, g_app.appDir);
-    if (exitCode != 0) AppendLogFromWorker(L"yt-dlp update failed; continuing with current copy.\r\n");
+    if (advanced) AppendLogFromWorker(L"DEBUG command: " + command + L"\r\n");
+    int exitCode = RunCommand(command, g_app.appDir, nullptr, advanced);
+    if (exitCode != 0) ShowUserMessage(advanced, L"Could not update yt-dlp, continuing with the current copy.\r\n", L"yt-dlp update failed; continuing with current copy.\r\n");
     return true;
 }
 
-bool EnsureFfmpeg(const fs::path& root) {
+bool EnsureFfmpeg(const fs::path& root, bool advanced) {
     fs::path localBin = LocalFfmpegBin();
     if (ExistingFfmpegBin(localBin)) {
         EnsureFfmpegPath(localBin);
@@ -269,16 +278,16 @@ bool EnsureFfmpeg(const fs::path& root) {
         return true;
     }
 
-    if (RunCommand(L"where ffmpeg", g_app.appDir) == 0) return true;
+    if (RunCommand(L"where ffmpeg", g_app.appDir, nullptr, advanced) == 0) return true;
 
-    AppendLogFromWorker(L"ffmpeg.exe not found. Downloading portable build to " + root.wstring() + L" (~100MB)...\r\n");
+    ShowUserMessage(advanced, L"Preparing media tools. This can take a few minutes the first time...\r\n", L"ffmpeg.exe not found. Downloading portable build to " + root.wstring() + L" (~100MB)...\r\n");
     fs::path temp = fs::temp_directory_path() / (L"yt-downloader-ffmpeg-" + std::to_wstring(GetTickCount64()));
     fs::path zip = temp / L"ffmpeg.zip";
-    if (!DownloadFilePowerShell(L"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", zip)) return false;
+    if (!DownloadFilePowerShell(L"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", zip, advanced)) return false;
 
-    AppendLogFromWorker(L"Extracting ffmpeg...\r\n");
+    ShowUserMessage(advanced, L"Installing media tools...\r\n", L"Extracting ffmpeg...\r\n");
     std::wstring command = L"powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path " + Quote(zip.wstring()) + L" -DestinationPath " + Quote(temp.wstring()) + L" -Force\"";
-    if (RunCommand(command, g_app.appDir) != 0) return false;
+    if (RunCommand(command, g_app.appDir, nullptr, advanced) != 0) return false;
 
     fs::path found;
     for (const auto& entry : fs::directory_iterator(temp)) {
@@ -299,16 +308,16 @@ bool EnsureFfmpeg(const fs::path& root) {
     return ExistingFfmpegBin(target / L"bin");
 }
 
-void WriteRunHeader(const fs::path& logFile, const std::wstring& title, bool debug) {
+void WriteRunHeader(const fs::path& logFile, const std::wstring& title, bool advanced) {
     std::ofstream out(logFile, std::ios::binary);
     out << ToUtf8(title) << " started\r\n";
-    out << "Debug: " << (debug ? "on" : "off") << "\r\n";
+    out << "Advanced mode: " << (advanced ? "on" : "off") << "\r\n";
     out << "========================================\r\n";
 }
 
-void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
+void DownloadWorker(ModeConfig config, fs::path root, bool advanced) {
     PostMessageW(g_app.hwnd, WM_APP + 3, TRUE, 0);
-    AppendLogFromWorker(L"\r\n=== " + config.title + L" ===\r\n");
+    ShowUserMessage(advanced, L"Starting " + config.title + L"...\r\n", L"\r\n=== " + config.title + L" ===\r\n");
 
     try {
         fs::create_directories(root);
@@ -321,7 +330,9 @@ void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
 
         if (!fs::exists(inputFile)) {
             CreateTemplateFile(inputFile);
-            AppendLogFromWorker(L"Created template input file: " + inputFile.wstring() + L"\r\nAdd URLs and run again.\r\n");
+            ShowUserMessage(advanced,
+                            L"I created " + inputFile.wstring() + L". Add YouTube links there, then run again.\r\n",
+                            L"Created template input file: " + inputFile.wstring() + L"\r\nAdd URLs and run again.\r\n");
             SetStatusFromWorker(L"Template created");
             PostMessageW(g_app.hwnd, WM_APP + 3, FALSE, 0);
             return;
@@ -329,24 +340,26 @@ void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
 
         std::vector<std::wstring> urls = ReadUrls(inputFile);
         if (urls.empty()) {
-            AppendLogFromWorker(L"No valid URLs in " + inputFile.wstring() + L"\r\n");
+            ShowUserMessage(advanced,
+                            L"No YouTube links found in " + inputFile.wstring() + L". Add one link per line and try again.\r\n",
+                            L"No valid URLs in " + inputFile.wstring() + L"\r\n");
             SetStatusFromWorker(L"No URLs found");
             PostMessageW(g_app.hwnd, WM_APP + 3, FALSE, 0);
             return;
         }
 
-        WriteRunHeader(logFile, config.title, debug);
+        WriteRunHeader(logFile, config.title, advanced);
         std::ofstream errors(errorLog, std::ios::binary);
 
-        if (!EnsureYtDlp(debug)) {
-            SetStatusFromWorker(L"yt-dlp missing");
+        if (!EnsureYtDlp(advanced)) {
+            SetStatusFromWorker(L"Downloader setup failed");
             PostMessageW(g_app.hwnd, WM_APP + 3, FALSE, 0);
             return;
         }
-        if (!EnsureFfmpeg(root)) {
-            AppendLogFromWorker(L"ffmpeg setup failed. Some downloads may fail.\r\n");
+        if (!EnsureFfmpeg(root, advanced)) {
+            ShowUserMessage(advanced, L"Could not prepare media tools. Video downloads may still work, but audio conversion needs ffmpeg.\r\n", L"ffmpeg setup failed. Some downloads may fail.\r\n");
             if (config.audio) {
-                SetStatusFromWorker(L"ffmpeg missing");
+                SetStatusFromWorker(L"Media tools missing");
                 PostMessageW(g_app.hwnd, WM_APP + 3, FALSE, 0);
                 return;
             }
@@ -357,10 +370,13 @@ void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
         int failed = 0;
         for (size_t i = 0; i < urls.size(); ++i) {
             const std::wstring& url = urls[i];
-            AppendLogFromWorker(L"\r\n[" + std::to_wstring(i + 1) + L"/" + std::to_wstring(urls.size()) + L"] " + url + L"\r\n");
+            ShowUserMessage(advanced,
+                            L"Downloading " + std::to_wstring(i + 1) + L" of " + std::to_wstring(urls.size()) + L"...\r\n",
+                            L"\r\n[" + std::to_wstring(i + 1) + L"/" + std::to_wstring(urls.size()) + L"] " + url + L"\r\n");
+            SetStatusFromWorker(L"Downloading " + std::to_wstring(i + 1) + L"/" + std::to_wstring(urls.size()));
             bool done = false;
             for (int attempt = 1; attempt <= 3 && !done; ++attempt) {
-                AppendLogFromWorker(L"Attempt " + std::to_wstring(attempt) + L"/3...\r\n");
+                ShowUserMessage(advanced, L"Working...\r\n", L"Attempt " + std::to_wstring(attempt) + L"/3...\r\n");
                 std::wstring command = Quote(ytdlp.wstring()) + L" --extractor-args \"youtube:player_client=web,android,ios\" ";
                 if (config.audio) {
                     command += L"-f \"bestaudio/best\" -x --audio-format \"mp3\" --audio-quality \"0\" ";
@@ -368,28 +384,43 @@ void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
                     command += L"-f \"bv*[height<=1080]+ba/b\" --embed-subs --sub-langs \"en.*\" ";
                 }
                 command += L"--no-playlist --embed-metadata --embed-thumbnail --convert-thumbnails jpg --retries 3 --fragment-retries 3 --no-overwrites --no-mtime ";
-                if (debug) command += L"--verbose ";
+                if (advanced) command += L"--verbose ";
                 command += L"-o " + Quote((outputDir / L"%(title)s.%(ext)s").wstring()) + L" " + Quote(url);
-                if (debug) AppendLogFromWorker(L"DEBUG command: " + command + L"\r\n");
-                int exitCode = RunCommand(command, root, &logFile);
+                if (advanced) AppendLogFromWorker(L"DEBUG command: " + command + L"\r\n");
+                int exitCode = RunCommand(command, root, &logFile, advanced);
                 done = exitCode == 0;
-                if (!done && attempt < 3) Sleep(5000);
+                if (!done && attempt < 3) {
+                    ShowUserMessage(advanced, L"That did not work yet. Retrying...\r\n", L"Retrying in 5 seconds...\r\n");
+                    Sleep(5000);
+                }
             }
             if (done) {
                 ++success;
-                AppendLogFromWorker(L"OK\r\n");
+                ShowUserMessage(advanced, L"Finished " + std::to_wstring(i + 1) + L" of " + std::to_wstring(urls.size()) + L".\r\n", L"OK\r\n");
             } else {
                 ++failed;
                 errors << "FAILED: " << ToUtf8(url) << "\r\n";
-                AppendLogFromWorker(L"FAILED after 3 attempts\r\n");
+                ShowUserMessage(advanced,
+                                L"Could not download one item after 3 tries. Details were saved to " + errorLog.wstring() + L".\r\n",
+                                L"FAILED after 3 attempts\r\n");
             }
         }
 
-        AppendLogFromWorker(L"\r\nSummary: " + std::to_wstring(success) + L" ok / " + std::to_wstring(failed) + L" fail\r\n");
-        AppendLogFromWorker(L"Output: " + outputDir.wstring() + L"\r\n");
-        SetStatusFromWorker(failed == 0 ? L"Done" : L"Done with failures");
+        if (failed == 0) {
+            ShowUserMessage(advanced,
+                            L"All downloads finished successfully.\r\nSaved to: " + outputDir.wstring() + L"\r\n",
+                            L"\r\nSummary: " + std::to_wstring(success) + L" ok / 0 fail\r\nOutput: " + outputDir.wstring() + L"\r\n");
+            SetStatusFromWorker(L"Done");
+        } else {
+            ShowUserMessage(advanced,
+                            L"Finished with " + std::to_wstring(failed) + L" failed item(s). Check " + errorLog.wstring() + L" for details.\r\n",
+                            L"\r\nSummary: " + std::to_wstring(success) + L" ok / " + std::to_wstring(failed) + L" fail\r\nOutput: " + outputDir.wstring() + L"\r\n");
+            SetStatusFromWorker(L"Done with failures");
+        }
     } catch (const std::exception& ex) {
-        AppendLogFromWorker(L"Error: " + ToWide(ex.what()) + L"\r\n");
+        ShowUserMessage(advanced,
+                        L"Something went wrong. Please try again or enable Advanced mode for technical details.\r\n",
+                        L"Error: " + ToWide(ex.what()) + L"\r\n");
         SetStatusFromWorker(L"Error");
     }
 
@@ -431,14 +462,14 @@ void LoadFileIntoLog(const std::wstring& fileName) {
 void StartDownload(bool audio) {
     if (g_app.busy) return;
     fs::path root = GetWindowTextString(g_app.rootEdit);
-    bool debug = SendMessageW(g_app.debugCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    bool advanced = SendMessageW(g_app.debugCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
     ModeConfig config;
     if (audio) {
         config = {true, L"audio.txt", L"results\\audio", L"download_log_audio.txt", L"error_log_audio.txt", L"Audio download"};
     } else {
         config = {false, L"video.txt", L"results", L"download_log.txt", L"error_log.txt", L"Video download"};
     }
-    std::thread(DownloadWorker, config, root, debug).detach();
+    std::thread(DownloadWorker, config, root, advanced).detach();
 }
 
 void CreateControls(HWND hwnd) {
@@ -459,7 +490,7 @@ void CreateControls(HWND hwnd) {
     CreateWindowW(L"BUTTON", L"Load Audio URLs", WS_CHILD | WS_VISIBLE, 305, 77, 130, 26, hwnd, reinterpret_cast<HMENU>(IDC_LOAD_AUDIO), nullptr, nullptr);
     g_app.downloadAudioButton = CreateWindowW(L"BUTTON", L"Download Audio", WS_CHILD | WS_VISIBLE, 445, 77, 130, 26, hwnd, reinterpret_cast<HMENU>(IDC_DOWNLOAD_AUDIO), nullptr, nullptr);
 
-    g_app.debugCheck = CreateWindowW(L"BUTTON", L"Debug mode (--verbose + command log)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+    g_app.debugCheck = CreateWindowW(L"BUTTON", L"Advanced mode (show technical logs)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                                      12, 116, 280, 24, hwnd, reinterpret_cast<HMENU>(IDC_DEBUG), nullptr, nullptr);
     g_app.statusLabel = CreateWindowW(L"STATIC", L"Ready", WS_CHILD | WS_VISIBLE, 305, 120, 410, 20, hwnd, reinterpret_cast<HMENU>(IDC_STATUS), nullptr, nullptr);
 
