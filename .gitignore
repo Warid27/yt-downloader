@@ -1,5 +1,6 @@
 # Local agent/workspace state
 .qwen/
+specs/
 
 # Built Windows executables and compiler outputs
 *.exe
