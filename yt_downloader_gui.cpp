@@ -162,8 +162,15 @@ fs::path LocalFfmpegBin() {
     return g_app.appDir / L"ffmpeg-master-latest-win64-gpl-shared" / L"bin";
 }
 
-void EnsureFfmpegPath() {
-    fs::path bin = LocalFfmpegBin();
+fs::path RootFfmpegBin(const fs::path& root) {
+    return root / L"ffmpeg-master-latest-win64-gpl-shared" / L"bin";
+}
+
+bool ExistingFfmpegBin(const fs::path& bin) {
+    return fs::exists(bin / L"ffmpeg.exe");
+}
+
+void EnsureFfmpegPath(const fs::path& bin) {
     fs::path exe = bin / L"ffmpeg.exe";
     if (!fs::exists(exe)) return;
     std::wstring current;
@@ -249,18 +256,27 @@ bool EnsureYtDlp(bool debug) {
     return true;
 }
 
-bool EnsureFfmpeg() {
-    fs::path exe = LocalFfmpegBin() / L"ffmpeg.exe";
-    if (fs::exists(exe)) {
-        EnsureFfmpegPath();
+bool EnsureFfmpeg(const fs::path& root) {
+    fs::path localBin = LocalFfmpegBin();
+    if (ExistingFfmpegBin(localBin)) {
+        EnsureFfmpegPath(localBin);
         return true;
     }
 
-    AppendLogFromWorker(L"ffmpeg.exe not found. Downloading portable build (~100MB)...\r\n");
+    fs::path rootBin = RootFfmpegBin(root);
+    if (ExistingFfmpegBin(rootBin)) {
+        EnsureFfmpegPath(rootBin);
+        return true;
+    }
+
+    if (RunCommand(L"where ffmpeg", g_app.appDir) == 0) return true;
+
+    AppendLogFromWorker(L"ffmpeg.exe not found. Downloading portable build to " + root.wstring() + L" (~100MB)...\r\n");
     fs::path temp = fs::temp_directory_path() / (L"yt-downloader-ffmpeg-" + std::to_wstring(GetTickCount64()));
     fs::path zip = temp / L"ffmpeg.zip";
     if (!DownloadFilePowerShell(L"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", zip)) return false;
 
+    AppendLogFromWorker(L"Extracting ffmpeg...\r\n");
     std::wstring command = L"powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path " + Quote(zip.wstring()) + L" -DestinationPath " + Quote(temp.wstring()) + L" -Force\"";
     if (RunCommand(command, g_app.appDir) != 0) return false;
 
@@ -274,13 +290,13 @@ bool EnsureFfmpeg() {
     }
     if (found.empty()) return false;
 
-    fs::path target = g_app.appDir / L"ffmpeg-master-latest-win64-gpl-shared";
+    fs::path target = root / L"ffmpeg-master-latest-win64-gpl-shared";
     std::error_code ec;
     fs::remove_all(target, ec);
     fs::rename(found, target, ec);
     fs::remove_all(temp, ec);
-    EnsureFfmpegPath();
-    return fs::exists(exe);
+    EnsureFfmpegPath(target / L"bin");
+    return ExistingFfmpegBin(target / L"bin");
 }
 
 void WriteRunHeader(const fs::path& logFile, const std::wstring& title, bool debug) {
@@ -327,7 +343,7 @@ void DownloadWorker(ModeConfig config, fs::path root, bool debug) {
             PostMessageW(g_app.hwnd, WM_APP + 3, FALSE, 0);
             return;
         }
-        if (!EnsureFfmpeg()) {
+        if (!EnsureFfmpeg(root)) {
             AppendLogFromWorker(L"ffmpeg setup failed. Some downloads may fail.\r\n");
             if (config.audio) {
                 SetStatusFromWorker(L"ffmpeg missing");
