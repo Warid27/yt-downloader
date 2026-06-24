@@ -6,6 +6,7 @@ QWEN.md
 # Built Windows executables and compiler outputs
 *.exe
 *.obj
+*.res
 *.pdb
 *.ilk
 
