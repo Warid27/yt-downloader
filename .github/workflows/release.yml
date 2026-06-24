@@ -2,6 +2,9 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -38,8 +41,28 @@ jobs:
           path: yt-downloader-gui.exe
           if-no-files-found: error
 
+      - name: Set release metadata
+        id: release
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            "tag_name=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+            "release_name=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+            "prerelease=false" >> $env:GITHUB_OUTPUT
+          } else {
+            $version = "v0.0.$env:GITHUB_RUN_NUMBER"
+            "tag_name=$version" >> $env:GITHUB_OUTPUT
+            "release_name=$version" >> $env:GITHUB_OUTPUT
+            "prerelease=true" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.tag_name }}
+          name: ${{ steps.release.outputs.release_name }}
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          target_commitish: ${{ github.sha }}
           files: yt-downloader-gui.exe
